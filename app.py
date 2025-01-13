@@ -1,154 +1,117 @@
-from flask import Flask, request, render_template_string, redirect, url_for, flash
+from flask import Flask, request, render_template_string, redirect, url_for
 from instagrapi import Client
-import os
 import time
+import os
 
-# Initialize Flask app
 app = Flask(__name__)
-app.secret_key = "your_secret_key"
 
-# Global variable for Instagram client session
-ig_client = None
-
-# HTML Template with shadow border and background wallpaper
+# HTML template for the Flask web page
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Instagram Group Messaging</title>
+    <title>Instagram Message Sender</title>
     <style>
         body {
             font-family: Arial, sans-serif;
+            background-color: #f9f9f9;
             margin: 0;
-            padding: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            background: url('https://i.ibb.co/fFqG2rr/Picsart-24-07-11-17-16-03-306.jpg') no-repeat center center;
-            background-size: cover;
+            padding: 20px;
         }
         .container {
-            background-color: rgba(255, 255, 255, 0.9);
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-            max-width: 400px;
+            max-width: 600px;
+            margin: auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        textarea, input, button {
             width: 100%;
-        }
-        h1 {
-            text-align: center;
-            color: #333;
-            margin-bottom: 20px;
-        }
-        label {
-            display: block;
-            font-weight: bold;
-            margin: 10px 0 5px;
-        }
-        input, select, button {
-            width: 100%;
+            margin-bottom: 10px;
             padding: 10px;
-            margin-bottom: 15px;
             border: 1px solid #ccc;
             border-radius: 5px;
-            font-size: 16px;
-        }
-        input:focus, select:focus, button:focus {
-            outline: none;
-            border-color: #007bff;
-            box-shadow: 0 0 5px rgba(0, 123, 255, 0.5);
         }
         button {
-            background-color: #007bff;
+            background-color: #4CAF50;
             color: white;
             border: none;
             cursor: pointer;
-            font-weight: bold;
         }
         button:hover {
-            background-color: #0056b3;
-        }
-        .message {
-            color: red;
-            font-size: 14px;
-            text-align: center;
-        }
-        .success {
-            color: green;
-            font-size: 14px;
-            text-align: center;
+            background-color: #45a049;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Instagram Group Messaging</h1>
-        <form action="/" method="POST" enctype="multipart/form-data">
+        <h2>Instagram Message Sender</h2>
+        <form method="POST" action="/" enctype="multipart/form-data">
             <label for="username">Instagram Username:</label>
-            <input type="text" id="username" name="username" placeholder="Enter your username" required>
+            <input type="text" name="username" placeholder="Enter your Instagram username" required>
 
             <label for="password">Instagram Password:</label>
-            <input type="password" id="password" name="password" placeholder="Enter your password" required>
+            <input type="password" name="password" placeholder="Enter your Instagram password" required>
 
-            <label for="group_id">Group Chat ID:</label>
-            <input type="text" id="group_id" name="group_id" placeholder="Enter group chat ID" required>
+            <label for="targetUsername">Target Username:</label>
+            <input type="text" name="targetUsername" placeholder="Enter target username" required>
 
-            <label for="message_file">Message File:</label>
-            <input type="file" id="message_file" name="message_file" required>
-            <p class="info">Upload a text file containing messages, one per line.</p>
+            <label for="messageFile">Message File (TXT):</label>
+            <input type="file" name="messageFile" accept=".txt" required>
 
-            <label for="delay">Delay (seconds):</label>
-            <input type="number" id="delay" name="delay" placeholder="Enter delay in seconds" required>
+            <label for="delay">Delay Between Messages (seconds):</label>
+            <input type="number" name="delay" value="5" min="1" required>
 
-            <button type="submit">Send Messages</button>
+            <button type="submit">Start Messaging</button>
         </form>
     </div>
 </body>
 </html>
 '''
 
-@app.route("/", methods=["GET", "POST"])
-def home():
-    global ig_client
+# Flask routes
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        target_username = request.form['targetUsername']
+        delay = int(request.form['delay'])
+        message_file = request.files['messageFile']
 
-    if request.method == "POST":
+        # Save the uploaded message file
+        if not message_file:
+            return "No message file uploaded!"
+        message_file_path = os.path.join("messages.txt")
+        message_file.save(message_file_path)
+
+        # Start messaging
         try:
-            # Collect form data
-            username = request.form["username"]
-            password = request.form["password"]
-            group_id = request.form["group_id"]
-            delay = int(request.form["delay"])
-            message_file = request.files["message_file"]
+            # Login to Instagram
+            cl = Client()
+            cl.login(username, password)
+
+            # Get the user ID of the target
+            user_id = cl.user_id_from_username(target_username)
 
             # Read messages from file
-            messages = message_file.read().decode("utf-8").splitlines()
-            if not messages:
-                flash("Message file is empty!", "error")
-                return redirect(url_for("home"))
+            with open(message_file_path, "r") as file:
+                messages = file.readlines()
 
-            # Login to Instagram
-            if not ig_client:
-                ig_client = Client()
-                ig_client.login(username, password)
-                flash("Logged in successfully!", "success")
-
-            # Send messages to group
+            # Send messages
             for message in messages:
-                print(f"Sending message to group {group_id}: {message}")
-                ig_client.direct_send(message, thread_ids=[group_id])
-                time.sleep(delay)  # Delay between messages
+                cl.direct_send(message.strip(), [user_id])
+                print(f"Sent: {message.strip()}")
+                time.sleep(delay)
 
-            flash("All messages sent successfully!", "success")
+            return redirect(url_for('index'))
         except Exception as e:
-            flash(f"An error occurred: {e}", "error")
-
-        return redirect(url_for("home"))
-
+            return f"An error occurred: {str(e)}"
     return render_template_string(HTML_TEMPLATE)
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
-          
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+                
